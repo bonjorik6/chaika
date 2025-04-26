@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -21,20 +22,20 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // локально
+		port = "8080" // Локально для тестов
 	}
 
-	log.Println("Server started on port:", port)
-	err := http.ListenAndServe(":" + port, nil)
+	log.Println("Server started on port", port)
+	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+		log.Fatal("ListenAndServe error:", err)
 	}
 }
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
+		log.Println("Upgrade error:", err)
 		return
 	}
 	defer ws.Close()
@@ -44,7 +45,7 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, msg, err := ws.ReadMessage()
 		if err != nil {
-			log.Println("error:", err)
+			log.Println("ReadMessage error:", err)
 			delete(clients, ws)
 			break
 		}
@@ -58,7 +59,7 @@ func handleMessages() {
 		for client := range clients {
 			err := client.WriteMessage(websocket.TextMessage, msg)
 			if err != nil {
-				log.Printf("error: %v", err)
+				log.Printf("WriteMessage error: %v", err)
 				client.Close()
 				delete(clients, client)
 			}
