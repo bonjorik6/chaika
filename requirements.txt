@@ -1,6 +1,1 @@
 websockets
-PyQt5
-websocket-client
-sounddevice
-simpleaudio
-numpy
