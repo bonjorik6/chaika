@@ -5,28 +5,29 @@ import json
 
 connected_clients = set()
 
-async def handler(websocket, path):
+async def handler(websocket):
+    print("Клиент подключился")
     connected_clients.add(websocket)
     try:
         async for message in websocket:
-            # Декодируем, если пришло в байтах
-            if isinstance(message, bytes):
-                message = message.decode('utf-8')
-            
             try:
+                # Убедимся, что это текст
+                if isinstance(message, bytes):
+                    message = message.decode('utf-8')
+
                 data = json.loads(message)
-                msg_type = data.get("type")
-                if msg_type == "text" or msg_type == "audio":
-                    # Отправляем всем, кроме отправителя
-                    await asyncio.gather(*[
-                        client.send(json.dumps(data))
-                        for client in connected_clients
-                        if client != websocket
-                    ])
+
+                # Проверка структуры сообщения
+                if 'type' in data and 'data' in data:
+                    # Рассылаем сообщение всем остальным клиентам
+                    tasks = []
+                    for client in connected_clients:
+                        if client != websocket:
+                            tasks.append(client.send(json.dumps(data)))
+                    if tasks:
+                        await asyncio.gather(*tasks)
                 else:
-                    print(f"Неизвестный тип сообщения: {msg_type}")
-            except json.JSONDecodeError:
-                print("Ошибка декодирования JSON")
+                    print("Неверный формат сообщения")
             except Exception as e:
                 print(f"Ошибка обработки сообщения: {e}")
     except websockets.ConnectionClosed:
