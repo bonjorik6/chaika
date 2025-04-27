@@ -5,19 +5,22 @@ import json
 
 connected_clients = set()
 
-async def handler(websocket, path):
+async def handler(websocket):
     connected_clients.add(websocket)
     try:
         async for message in websocket:
             try:
                 data = json.loads(message)
                 if data["type"] in ("text", "audio"):
-                    # Шлем ВСЕМ клиентам тот же JSON
-                    await asyncio.gather(*[client.send(json.dumps(data)) for client in connected_clients])
+                    await asyncio.gather(*[
+                        client.send(json.dumps(data))
+                        for client in connected_clients
+                        if client != websocket
+                    ])
                 else:
-                    print("Неизвестный тип сообщения:", data["type"])
+                    print(f"Неизвестный тип сообщения: {data['type']}")
             except json.JSONDecodeError:
-                print("Ошибка декодирования JSON")
+                print("Получено невалидное сообщение")
     except websockets.ConnectionClosed:
         print("Клиент отключился")
     finally:
