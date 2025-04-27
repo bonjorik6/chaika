@@ -1,6 +1,7 @@
 import asyncio
 import websockets
 import os
+import json
 
 connected_clients = set()
 
@@ -8,21 +9,19 @@ async def handler(websocket, path):
     connected_clients.add(websocket)
     try:
         async for message in websocket:
-            # Рассылаем сообщение только активным клиентам
-            disconnected = []
-            for client in connected_clients:
-                try:
-                    await client.send(message)
-                except websockets.ConnectionClosed:
-                    disconnected.append(client)
-            # Удаляем отключившихся клиентов
-            for client in disconnected:
-                connected_clients.remove(client)
+            try:
+                data = json.loads(message)
+                if data["type"] in ("text", "audio"):
+                    # Просто пересылаем другим клиентам как есть
+                    await asyncio.gather(*[client.send(message) for client in connected_clients if client != websocket])
+                else:
+                    print("Неизвестный тип сообщения:", data["type"])
+            except json.JSONDecodeError:
+                print("Ошибка декодирования JSON от клиента")
     except websockets.ConnectionClosed:
         print("Клиент отключился")
     finally:
-        if websocket in connected_clients:
-            connected_clients.remove(websocket)
+        connected_clients.remove(websocket)
 
 async def main():
     port = int(os.environ.get("PORT", 8080))
