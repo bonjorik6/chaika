@@ -10,26 +10,28 @@ async def handler(websocket):
     connected_clients.add(websocket)
     try:
         async for message in websocket:
+            print(f"Получено сообщение: {message}")
             try:
-                # Убедимся, что это текст
+                # Декодирование сообщения
                 if isinstance(message, bytes):
                     message = message.decode('utf-8')
-
+                
                 data = json.loads(message)
 
-                # Проверка структуры сообщения
-                if 'type' in data and 'data' in data:
-                    # Рассылаем сообщение всем остальным клиентам
-                    tasks = []
-                    for client in connected_clients:
-                        if client != websocket:
-                            tasks.append(client.send(json.dumps(data)))
-                    if tasks:
-                        await asyncio.gather(*tasks)
+                # Проверка правильности формата
+                if isinstance(data, dict) and "type" in data and "data" in data:
+                    # Рассылаем всем другим клиентам
+                    await asyncio.gather(*[
+                        client.send(json.dumps(data))
+                        for client in connected_clients
+                        if client != websocket
+                    ])
                 else:
-                    print("Неверный формат сообщения")
+                    print("⚠️ Неверный формат данных!")
+            except json.JSONDecodeError:
+                print("⚠️ Невозможно декодировать JSON.")
             except Exception as e:
-                print(f"Ошибка обработки сообщения: {e}")
+                print(f"⚠️ Ошибка обработки сообщения: {e}")
     except websockets.ConnectionClosed:
         print("Клиент отключился")
     finally:
