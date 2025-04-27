@@ -5,33 +5,19 @@ import json
 
 connected_clients = set()
 
-async def handler(websocket):
-    print("Клиент подключился")
+async def handler(websocket, path):
     connected_clients.add(websocket)
     try:
         async for message in websocket:
-            print(f"Получено сообщение: {message}")
             try:
-                # Декодирование сообщения
-                if isinstance(message, bytes):
-                    message = message.decode('utf-8')
-                
                 data = json.loads(message)
-
-                # Проверка правильности формата
-                if isinstance(data, dict) and "type" in data and "data" in data:
-                    # Рассылаем всем другим клиентам
-                    await asyncio.gather(*[
-                        client.send(json.dumps(data))
-                        for client in connected_clients
-                        if client != websocket
-                    ])
+                if data["type"] in ("text", "audio"):
+                    # Шлем ВСЕМ клиентам тот же JSON
+                    await asyncio.gather(*[client.send(json.dumps(data)) for client in connected_clients])
                 else:
-                    print("⚠️ Неверный формат данных!")
+                    print("Неизвестный тип сообщения:", data["type"])
             except json.JSONDecodeError:
-                print("⚠️ Невозможно декодировать JSON.")
-            except Exception as e:
-                print(f"⚠️ Ошибка обработки сообщения: {e}")
+                print("Ошибка декодирования JSON")
     except websockets.ConnectionClosed:
         print("Клиент отключился")
     finally:
@@ -39,7 +25,7 @@ async def handler(websocket):
 
 async def main():
     port = int(os.environ.get("PORT", 8080))
-    async with websockets.serve(handler, "0.0.0.0", port, max_size=None):
+    async with websockets.serve(handler, "0.0.0.0", port):
         print(f"Сервер запущен на порту {port}")
         await asyncio.Future()
 
