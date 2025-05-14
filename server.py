@@ -11,7 +11,11 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                if data["type"] in ("text", "audio", "media"):
+                # теперь включаем WebRTC‑сигналинг вместе с текстом/аудио/медиа
+                if data["type"] in (
+                    "text", "audio", "media",
+                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"
+                ):
                     await asyncio.gather(*[
                         client.send(json.dumps(data))
                         for client in connected_clients
