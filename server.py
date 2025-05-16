@@ -1,85 +1,40 @@
-import os, json, asyncio
-from typing import Dict, Set
+import asyncio
+import websockets
+import os
+import json
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-import asyncpg
-import uvicorn
+connected_clients = set()
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # обязательно настроить в Railway
-PORT         = int(os.getenv("PORT", 8000))
-
-app = FastAPI()
-DB_POOL: asyncpg.Pool = None
-ROOMS: Dict[str, Set[WebSocket]] = {}
-
-@app.on_event("startup")
-async def on_startup():
-    global DB_POOL
-    DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
-
-@app.get("/")
-async def root():
-    return {"status": "ok"}
-
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await ws.accept()
-    room_id = None
-    call_id = None
+async def handler(websocket):
+    connected_clients.add(websocket)
     try:
-        while True:
-            raw = await ws.receive_text()
-            data = json.loads(raw)
-            t = data.get("type")
-
-            if t == "join":
-                room_id = str(data["room_id"])
-                ROOMS.setdefault(room_id, set()).add(ws)
-                continue
-
-            peers = ROOMS.get(room_id, set())
-
-            if t == "webrtc_offer":
-                call_id   = data["call_id"]
-                initiator = data["initiator"]
-                recipient = data["recipient"]
-                # пишем в БД
-                await DB_POOL.execute(
-                    "INSERT INTO calls(room_id, initiator, recipient, status, created_at) "
-                    "VALUES($1,$2,$3,'calling',now())",
-                    int(room_id), initiator, recipient
-                )
-                # ретранслируем
-                msg = json.dumps(data)
-                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
-                continue
-
-            if t in ("webrtc_answer", "webrtc_ice"):
-                msg = json.dumps(data)
-                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
-                continue
-
-            if t == "webrtc_end":
-                duration = float(data.get("duration", 0))
-                await DB_POOL.execute(
-                    "UPDATE calls SET ended_at=now(), duration=$1, status='ended' WHERE call_id=$2",
-                    duration, data["call_id"]
-                )
-                msg = json.dumps(data)
-                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
-                continue
-
-            # прочие (text, file, voice, media)
-            if t in ("text", "file", "voice", "media"):
-                msg = json.dumps(data)
-                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
-                continue
-
-    except WebSocketDisconnect:
-        pass
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                # теперь включаем WebRTC‑сигналинг вместе с текстом/аудио/медиа
+                if data["type"] in (
+                    "text", "audio", "media",
+                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"
+                ):
+                    await asyncio.gather(*[
+                        client.send(json.dumps(data))
+                        for client in connected_clients
+                        if client != websocket
+                    ])
+                else:
+                    print(f"Неизвестный тип сообщения: {data['type']}")
+            except json.JSONDecodeError:
+                print("Получено невалидное сообщение")
+    except websockets.ConnectionClosed:
+        print("Клиент отключился")
     finally:
-        if room_id and ws in ROOMS.get(room_id, set()):
-            ROOMS[room_id].remove(ws)
+        connected_clients.remove(websocket)
+
+async def main():
+    port = int(os.environ.get("PORT", 8080))
+    async with websockets.serve(handler, "0.0.0.0", port):
+        print(f"Сервер запущен на порту {port}")
+        await asyncio.Future()
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=PORT)
+    asyncio.run(main())
