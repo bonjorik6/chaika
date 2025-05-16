@@ -5,7 +5,5 @@
     }
   },
   "deploy": {
--   "startCommand": "python server.py"
-    // Убираем эту строчку
   }
 }
