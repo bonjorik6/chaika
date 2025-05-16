@@ -11,19 +11,18 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                # обрабатываем только текстовые, аудио и медиа‑сообщения
-                if data["type"] in ("text", "audio", "media"):
-                    # ретранслируем всем остальным
+                # поддерживаем текст, медиа и WebRTC сигналинг
+                if data.get("type") in ("text", "audio", "media", "offer", "answer", "candidate"):
+                    # ретранслируем всем остальным клиентам
                     await asyncio.gather(*[
                         client.send(json.dumps(data))
                         for client in connected_clients
                         if client != websocket
                     ])
                 else:
-                    # игнорируем все звонковые/WebRTC сообщения
-                    print(f"Ignored message type: {data['type']}")
+                    print(f"Ignored unknown message type: {data.get('type')}")
             except json.JSONDecodeError:
-                print("Получено невалидное JSON‑сообщение")
+                print("Получено невалидное JSON-сообщение")
     except websockets.ConnectionClosed:
         print("Клиент отключился")
     finally:
