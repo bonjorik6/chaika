@@ -1,9 +1,10 @@
 {
-  "build": {
-    "env": {
-      "PYTHONUNBUFFERED": "1"
+    "build": {
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "deploy": {
+      "startCommand": "python server.py"
     }
-  },
-  "deploy": {
   }
-}
