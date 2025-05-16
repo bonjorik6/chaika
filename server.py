@@ -13,12 +13,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("webrtc-signal-server")
 
-# { client_id: websocket }
+# Хранит client_id → websocket
 clients = {}
 
 async def register(websocket, client_id):
+    # Если уже есть клиент с таким ID — закрываем старое соединение
     if client_id in clients:
-        # Если клиент с таким ID уже есть — закрываем старое соединение
         old = clients[client_id]
         await old.close(code=4000, reason="Duplicate client_id")
     clients[client_id] = websocket
@@ -29,23 +29,15 @@ async def unregister(client_id):
     logger.info(f"Unregistered client: {client_id}")
 
 async def route_message(data, sender_id):
-    """
-    Ожидаем, что data содержит:
-    {
-      "type": "...",
-      "from": "<sender_id>",
-      "to": "<recipient_id>",    # если нет — можно рассылать всем
-      ... payload ...
-    }
-    """
     msg_type = data.get("type")
     to_id = data.get("to")
 
+    # Проверка обязательных полей
     if not msg_type or not data.get("from"):
         logger.warning("Invalid message format: missing 'type' or 'from'")
         return
 
-    # Если указан конкретный получатель
+    # Отправка конкретному клиенту
     if to_id:
         ws = clients.get(to_id)
         if ws:
@@ -53,13 +45,13 @@ async def route_message(data, sender_id):
         else:
             logger.warning(f"Client '{to_id}' not found")
     else:
-        # Broadcast всем, кроме отправителя
+        # Broad­cast всем, кроме отправителя
         for cid, ws in clients.items():
             if cid != sender_id:
                 await ws.send(json.dumps(data))
 
 async def handler(websocket):
-    # Первый пакет от клиента должен быть регистрация с client_id
+    # 1) ждём регистрационного сообщения
     try:
         init = await asyncio.wait_for(websocket.recv(), timeout=5)
         init_data = json.loads(init)
@@ -73,10 +65,6 @@ async def handler(websocket):
 
     await register(websocket, client_id)
 
-    # Настроим ping/pong
-    websocket.ping_interval = 20
-    websocket.ping_timeout = 20
-
     try:
         async for raw in websocket:
             try:
@@ -85,7 +73,7 @@ async def handler(websocket):
                 logger.warning("Received non-JSON message")
                 continue
 
-            # Перенаправляем сигнальные сообщения
+            # Сигнальные сообщения и прочие (text, audio, media)
             if data.get("type", "").startswith("webrtc_") or data.get("type") in ("text", "audio", "media"):
                 await route_message(data, sender_id=client_id)
             else:
@@ -101,14 +89,14 @@ async def main():
         handler,
         host="0.0.0.0",
         port=port,
-        max_size=2**20,           # максимальный размер сообщения 1 МБ
+        max_size=2**20,           # макс. размер 1 МБ
         ping_interval=20,
         ping_timeout=20,
         close_timeout=5
     )
     logger.info(f"Server started on port {port}")
 
-    # Гладкое завершение по SIGINT/SIGTERM
+    # Graceful shutdown
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(server.close()))
