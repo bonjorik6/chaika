@@ -1,111 +1,85 @@
-import asyncio, json, os
-import websockets
-import asyncpg
+import os, json, asyncio
 from typing import Dict, Set
 
-# пул подключений к базе
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import asyncpg
+import uvicorn
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # обязательно настроить в Railway
+PORT         = int(os.getenv("PORT", 8000))
+
+app = FastAPI()
 DB_POOL: asyncpg.Pool = None
+ROOMS: Dict[str, Set[WebSocket]] = {}
 
-# room_id → { websocket, ... }
-ROOMS: Dict[str, Set[websockets.WebSocketServerProtocol]] = {}
-
-async def handler(ws, path):
+@app.on_event("startup")
+async def on_startup():
     global DB_POOL
+    DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
     room_id = None
     call_id = None
-
-    await ws.send(json.dumps({"type":"hello"}))  # для проверки коннекта
     try:
-        async for raw in ws:
+        while True:
+            raw = await ws.receive_text()
             data = json.loads(raw)
-            typ  = data.get("type")
+            t = data.get("type")
 
-            # ————————— JOIN —————————
-            if typ == "join":
+            if t == "join":
                 room_id = str(data["room_id"])
                 ROOMS.setdefault(room_id, set()).add(ws)
-                print(f"[SERVER] client joined room {room_id}")
                 continue
 
-            # все сигналы только внутри комнаты
             peers = ROOMS.get(room_id, set())
 
-            # ————————— OFFER —————————
-            if typ == "webrtc_offer":
+            if t == "webrtc_offer":
                 call_id   = data["call_id"]
                 initiator = data["initiator"]
                 recipient = data["recipient"]
-
-                # создаём запись звонка в БД
+                # пишем в БД
                 await DB_POOL.execute(
-                    """
-                    INSERT INTO calls(room_id, initiator, recipient, status, created_at)
-                    VALUES($1, $2, $3, 'calling', now())
-                    """,
+                    "INSERT INTO calls(room_id, initiator, recipient, status, created_at) "
+                    "VALUES($1,$2,$3,'calling',now())",
                     int(room_id), initiator, recipient
                 )
-                print(f"[SERVER] webrtc_offer in room {room_id}, call {call_id}")
-
-                # рассылаем оффер всем кроме отправителя
+                # ретранслируем
                 msg = json.dumps(data)
-                await asyncio.gather(*[
-                    p.send(msg) for p in peers if p is not ws
-                ])
+                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
                 continue
 
-            # ————————— ANSWER / ICE —————————
-            if typ in ("webrtc_answer", "webrtc_ice"):
-                print(f"[SERVER] {typ} in room {room_id}, call {data.get('call_id')}")
+            if t in ("webrtc_answer", "webrtc_ice"):
                 msg = json.dumps(data)
-                await asyncio.gather(*[
-                    p.send(msg) for p in peers if p is not ws
-                ])
+                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
                 continue
 
-            # ————————— END —————————
-            if typ == "webrtc_end":
+            if t == "webrtc_end":
                 duration = float(data.get("duration", 0))
-                # обновляем БД
                 await DB_POOL.execute(
-                    """
-                    UPDATE calls
-                    SET ended_at = now(), duration = $1, status = 'ended'
-                    WHERE call_id = $2
-                    """,
+                    "UPDATE calls SET ended_at=now(), duration=$1, status='ended' WHERE call_id=$2",
                     duration, data["call_id"]
                 )
-                print(f"[SERVER] call {data['call_id']} ended, duration={duration}")
                 msg = json.dumps(data)
-                await asyncio.gather(*[
-                    p.send(msg) for p in peers if p is not ws
-                ])
+                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
                 continue
 
-            # ————————— прочие (text, file…) —————————
-            if typ in ("text", "file", "voice", "media"):
+            # прочие (text, file, voice, media)
+            if t in ("text", "file", "voice", "media"):
                 msg = json.dumps(data)
-                await asyncio.gather(*[
-                    p.send(msg) for p in peers if p is not ws
-                ])
+                await asyncio.gather(*[p.send_text(msg) for p in peers if p is not ws])
                 continue
 
-            print(f"[SERVER] unknown type: {typ}")
-
-    except websockets.ConnectionClosed:
+    except WebSocketDisconnect:
         pass
     finally:
-        # при дисконнекте убираем из room
         if room_id and ws in ROOMS.get(room_id, set()):
             ROOMS[room_id].remove(ws)
 
-async def main():
-    global DB_POOL
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
-    port = int(os.getenv("PORT", 8080))
-    async with websockets.serve(handler, "0.0.0.0", port):
-        print(f"[SERVER] listening on port {port}")
-        await asyncio.Future()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT)
