@@ -11,20 +11,19 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                # теперь включаем WebRTC‑сигналинг вместе с текстом/аудио/медиа
-                if data["type"] in (
-                    "text", "audio", "media",
-                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"
-                ):
+                # обрабатываем только текстовые, аудио и медиа‑сообщения
+                if data["type"] in ("text", "audio", "media"):
+                    # ретранслируем всем остальным
                     await asyncio.gather(*[
                         client.send(json.dumps(data))
                         for client in connected_clients
                         if client != websocket
                     ])
                 else:
-                    print(f"Неизвестный тип сообщения: {data['type']}")
+                    # игнорируем все звонковые/WebRTC сообщения
+                    print(f"Ignored message type: {data['type']}")
             except json.JSONDecodeError:
-                print("Получено невалидное сообщение")
+                print("Получено невалидное JSON‑сообщение")
     except websockets.ConnectionClosed:
         print("Клиент отключился")
     finally:
@@ -34,7 +33,7 @@ async def main():
     port = int(os.environ.get("PORT", 8080))
     async with websockets.serve(handler, "0.0.0.0", port):
         print(f"Сервер запущен на порту {port}")
-        await asyncio.Future()
+        await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
     asyncio.run(main())
