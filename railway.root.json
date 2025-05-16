@@ -9,7 +9,13 @@
         }
       },
       "deploy": {
-        "startCommand": "python server.py"
+        "startCommand": "python server.py",
+        "ports": [
+          {
+            "port": 8080,
+            "protocol": "tcp"
+          }
+        ]
       }
     },
     {
