@@ -1,0 +1,11 @@
+{
+  "build": {
+    "env": {
+      "PYTHONUNBUFFERED": "1"
+    }
+  },
+  "deploy": {
+-   "startCommand": "python server.py"
+    // Убираем эту строчку
+  }
+}
