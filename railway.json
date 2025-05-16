@@ -16,6 +16,7 @@
       "name": "coturn",
       "path": "turn",
       "build": {
+        "type": "docker", 
         "dockerfile": "turn/Dockerfile",
         "env": {
           "STATIC_AUTH_SECRET": "chaika_2025"
