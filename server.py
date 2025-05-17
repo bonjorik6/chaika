@@ -1,4 +1,5 @@
 # server.py
+
 import asyncio
 import websockets
 import os
@@ -12,12 +13,15 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
+                # расширяем "белый список" типов:
                 if data["type"] in (
                     "text", "audio", "media",
-                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"
+                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end",
+                    "call_request", "call_answer", "call_reject", "call_end"
                 ):
+                    # ретранслируем остальным:
                     await asyncio.gather(*[
-                        client.send(json.dumps(data))
+                        client.send(message)
                         for client in connected_clients
                         if client != websocket
                     ])
