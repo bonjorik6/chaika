@@ -102,7 +102,6 @@ async def handler(ws):
 
                 except Exception as e:
                     logger.exception("SQL error on %s: %s", typ, e)
-                    # разрываем WS с 1011, чтобы клиент понимал, что что-то сломалось
                     await ws.close(code=1011, reason="DB error")
                     return
 
@@ -110,27 +109,27 @@ async def handler(ws):
                     if conn:
                         conn.close()
 
-            # 3) Ретранслируем всем остальным нужные типы
+            # 3) Ретранслируем сигнализацию и медиа‑команды
             white_list = {
                 "text", "audio", "media",
                 "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end",
                 *CALL_TYPES
             }
+
+            msg = json.dumps(data)
             if typ == "call_request":
-                # отправляем call_request всем (включая инициатора),
-                # чтобы инициатор получил call_id из БД
-                msg = json.dumps(data)
+                # всем, включая отправителя (для получения call_id)
                 await asyncio.gather(
                     *[c.send(msg) for c in connected_clients],
                     return_exceptions=True
                 )
             elif typ in white_list:
-                # остальные — только другим
-                msg = json.dumps(data)
                 await asyncio.gather(
                     *[c.send(msg) for c in connected_clients if c != ws],
                     return_exceptions=True
                 )
+            else:
+                logger.debug("Игнорирую неизвестный тип сообщения: %s", typ)
 
     except websockets.ConnectionClosed:
         logger.info("Клиент отключился")
@@ -140,7 +139,7 @@ async def handler(ws):
 async def main():
     port = int(os.environ.get("PORT", 8080))
     async with websockets.serve(handler, "0.0.0.0", port):
-        logger.info(f"Сервер запущен на порту {port}")
+        logger.info(f"Сервер запущен на порту {port}") 
         await asyncio.Future()
 
 if __name__ == "__main__":
