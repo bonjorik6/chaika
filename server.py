@@ -116,14 +116,21 @@ async def handler(ws):
                 "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end",
                 *CALL_TYPES
             }
-            if typ in white_list:
+            if typ == "call_request":
+                # отправляем call_request всем (включая инициатора),
+                # чтобы инициатор получил call_id из БД
+                msg = json.dumps(data)
+                await asyncio.gather(
+                    *[c.send(msg) for c in connected_clients],
+                    return_exceptions=True
+                )
+            elif typ in white_list:
+                # остальные — только другим
                 msg = json.dumps(data)
                 await asyncio.gather(
                     *[c.send(msg) for c in connected_clients if c != ws],
                     return_exceptions=True
                 )
-            else:
-                logger.debug("Неизвестный тип сообщения: %s", typ)
 
     except websockets.ConnectionClosed:
         logger.info("Клиент отключился")
