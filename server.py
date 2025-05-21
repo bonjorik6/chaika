@@ -1,44 +1,39 @@
-# server.py
+import asyncio
+import websockets
 import os
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-import uvicorn
 
-app = FastAPI()
-active_connections: list[WebSocket] = []
+connected_clients = set()
 
-@app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
-
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await ws.accept()
-    active_connections.append(ws)
-    print(f"[SERVER] Client connected: {ws.client}")
-
+async def handler(websocket):
+    connected_clients.add(websocket)
     try:
-        while True:
-            msg = await ws.receive_text()
-            disconnected = []
-            for conn in active_connections:
-                if conn is ws:
-                    continue
-                try:
-                    await conn.send_text(msg)
-                except Exception:
-                    disconnected.append(conn)
-            for dc in disconnected:
-                active_connections.remove(dc)
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                if data["type"] in (
+                    "text", "audio", "media",
+                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"
+                ):
+                    await asyncio.gather(*[
+                        client.send(json.dumps(data))
+                        for client in connected_clients
+                        if client != websocket
+                    ])
+                else:
+                    print(f"Неизвестный тип сообщения: {data['type']}")
+            except json.JSONDecodeError:
+                print("Получено невалидное сообщение")
+    except websockets.ConnectionClosed:
+        print("Клиент отключился")
+    finally:
+        connected_clients.remove(websocket)
 
-    except WebSocketDisconnect:
-        print(f"[SERVER] Client disconnected: {ws.client}")
-        active_connections.remove(ws)
-    except Exception as e:
-        print(f"[SERVER] Error in connection {ws.client}: {e}")
-        if ws in active_connections:
-            active_connections.remove(ws)
+async def main():
+    port = int(os.environ.get("PORT", 8080))
+    async with websockets.serve(handler, "0.0.0.0", port):
+        print(f"Сервер запущен на порту {port}")
+        await asyncio.Future()
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port)
+    asyncio.run(main())
