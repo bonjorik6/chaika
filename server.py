@@ -1,123 +1,58 @@
-import os
-import json
 import asyncio
 import websockets
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import os
+import json
 import logging
 
-# --- настройки подключения к БД ---
-DB_HOST     = os.environ.get("PGHOST", "centerbeam.proxy.rlwy.net")
-DB_PORT     = os.environ.get("PGPORT", 31825)
-DB_NAME     = os.environ.get("PGDATABASE", "railway")
-DB_USER     = os.environ.get("PGUSER", "postgres")
-DB_PASSWORD = os.environ.get("PGPASSWORD", "XrRCKeVnqILcchiVtRiwzUbtloCFAlVy")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("chat-server")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("webrtc-server")
+# просто хранит все открытые ws-соединения
+connected_clients: set[websockets.WebSocketServerProtocol] = set()
 
-def get_conn():
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        cursor_factory=RealDictCursor
-    )
-
-# --- WebSocket сервер ---
-connected_clients = set()
-
-async def handler(ws):
+async def handler(ws: websockets.WebSocketServerProtocol, path):
     connected_clients.add(ws)
+    logger.info(f"Client connected: {ws.remote_address}")
     try:
         async for raw in ws:
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                logger.warning("Получено невалидное сообщение: %r", raw)
+                logger.warning("Получено невалидное JSON-сообщение")
                 continue
 
-            typ      = data.get("type")
-            rid      = data.get("room_id")
-            frm      = data.get("from")
-            to_nick  = data.get("to")
-            call_id  = data.get("call_id")
+            typ = data.get("type")
+            logger.info(f"Received message type={typ} data={data}")
 
-            # --- Логика calls ---
-            try:
-                if typ == "call_request":
-                    conn = get_conn()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        INSERT INTO calls (room_id, initiator, recipient, status, created_at)
-                        VALUES (%s, %s, %s, 'pending', NOW())
-                        RETURNING id
-                    """, (rid, frm, to_nick))
-                    call_id = cur.fetchone()["id"]
-                    conn.commit()
-                    cur.close(); conn.close()
-                    data["call_id"] = call_id
-
-                elif typ == "call_answer" and call_id:
-                    conn = get_conn(); cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE calls SET status='in_progress', started_at=NOW()
-                        WHERE id=%s
-                    """, (call_id,))
-                    conn.commit(); cur.close(); conn.close()
-
-                elif typ == "call_reject" and call_id:
-                    conn = get_conn(); cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE calls SET status='cancelled', ended_at=NOW()
-                        WHERE id=%s
-                    """, (call_id,))
-                    conn.commit(); cur.close(); conn.close()
-
-                elif typ == "call_end" and call_id:
-                    conn = get_conn(); cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE calls
-                           SET status='finished',
-                               ended_at = NOW(),
-                               duration = EXTRACT(EPOCH FROM NOW() - started_at)::INT
-                         WHERE id = %s
-                    """, (call_id,))
-                    conn.commit(); cur.close(); conn.close()
-
-            except Exception as e:
-                logger.exception("Ошибка в обработке звонка %s: %s", typ, e)
-                # отвечаем клиенту ошибкой 1011
-                await ws.close(code=1011, reason="DB error")
-                return
-
-            # --- ретрансляция остальным ---
-            white_list = {
-                "text", "audio", "media",
-                "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end",
-                "call_request", "call_answer", "call_reject", "call_end"
-            }
-            if typ in white_list:
-                msg = json.dumps(data)
-                await asyncio.gather(*[
-                    c.send(msg) for c in connected_clients if c != ws
-                ])
+            # все типы, которые шлёт ваш клиент
+            if typ in ("text", "file", "voice", "image",
+                       "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"):
+                # разослать всем остальным
+                dead = []
+                for client in connected_clients:
+                    if client is ws:
+                        continue
+                    try:
+                        await client.send(raw)
+                    except Exception as e:
+                        logger.warning(f"Не удалось отправить клиенту {client.remote_address}: {e}")
+                        dead.append(client)
+                # убрать умершие коннекты
+                for d in dead:
+                    connected_clients.discard(d)
             else:
-                logger.debug("Неизвестный тип сообщения: %s", typ)
+                logger.warning(f"Неизвестный тип сообщения: {typ}")
 
     except websockets.ConnectionClosed:
-        logger.info("Клиент отключился")
+        logger.info(f"Client disconnected: {ws.remote_address}")
     finally:
         connected_clients.discard(ws)
-
 
 async def main():
     port = int(os.environ.get("PORT", 8080))
     async with websockets.serve(handler, "0.0.0.0", port):
-        logger.info(f"Сервер запущен на порту {port}")
-        await asyncio.Future()
+        logger.info(f"Server listening on port {port}")
+        await asyncio.Future()  # never exit
 
 if __name__ == "__main__":
     asyncio.run(main())
