@@ -1,77 +1,59 @@
 # server.py
 import os
-import json
 import asyncio
+import json
+import logging
 import websockets
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 
-# Хранилище: nick → websocket
-clients: dict[str, websockets.WebSocketServerProtocol] = {}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("chat-server")
 
-async def handler(ws: websockets.WebSocketServerProtocol, path):
-    """
-    1) Ждём первого сообщения: {"type":"register","from": "<nick>"}.
-    2) Сохраняем nick→ws.
-    3) Дальше любая data с type in {"text","file","voice"} рассылается всем остальным.
-    4) Печатаем в консоль каждое приходящее.
-    """
-    nick = None
+# Храним все подключённые WebSocket-соединения
+connected_clients: set[websockets.WebSocketServerProtocol] = set()
+
+async def handler(ws: websockets.WebSocketServerProtocol, path: str):
+    # Добавляем нового клиента
+    connected_clients.add(ws)
+    logger.info(f"[+] Client connected: {ws.remote_address}")
     try:
-        # 1. регистрация
-        raw = await ws.recv()
-        init = json.loads(raw)
-        if init.get("type") != "register" or "from" not in init:
-            await ws.close(1008, "Must register first")
-            return
-
-        nick = init["from"]
-        clients[nick] = ws
-        print(f"[+] Registered: {nick}")
-
-        # 2. основной цикл
         async for raw in ws:
+            # Парсим JSON (если невалидный — пропускаем)
             try:
-                msg = json.loads(raw)
+                data = json.loads(raw)
             except json.JSONDecodeError:
-                print("[!] Received non-JSON message")
+                logger.warning(f"[!] Received invalid JSON: {raw!r}")
                 continue
 
-            typ     = msg.get("type")
-            sender  = msg.get("from")
-            room_id = msg.get("room_id")
-            to_user = msg.get("to", None)
+            # Логгируем тип и room_id (если есть)
+            logger.info(f"→ Received type={data.get('type')!r} room_id={data.get('room_id')!r}")
 
-            # печатаем в консоль
-            print(f"⌞ {typ} from={sender!r} to={to_user!r} room={room_id!r} payload={msg}")
+            # Рассылаем всем остальным клиентам
+            # (они у себя в on_server_message() разберут JSON и обновят UI)
+            await asyncio.gather(
+                *(
+                    client.send(raw)
+                    for client in connected_clients
+                    if client is not ws
+                ),
+                return_exceptions=True
+            )
 
-            # если это чат-тип — шлём всем остальным
-            if typ in ("text", "file", "voice"):
-                # адресно (если указан) или всем остальным онлайн
-                targets = []
-                if to_user and to_user in clients:
-                    targets = [clients[to_user]]
-                else:
-                    targets = [ws2 for nick2, ws2 in clients.items() if ws2 is not ws]
-
-                await asyncio.gather(
-                    *(ws2.send(raw) for ws2 in targets),
-                    return_exceptions=True
-                )
-            else:
-                # не-чатовые типы можно добавить сюда
-                print(f"[i] Ignored message type: {typ}")
-
-    except ConnectionClosed:
-        print(f"[-] Disconnected: {nick}")
+    except (ConnectionClosedOK, ConnectionClosedError) as e:
+        logger.info(f"[-] Client disconnected: {ws.remote_address} ({e.code})")
     finally:
-        if nick and clients.get(nick) is ws:
-            del clients[nick]
+        connected_clients.remove(ws)
+        logger.info(f"[.] Remaining clients: {len(connected_clients)}")
 
 async def main():
     port = int(os.environ.get("PORT", 8080))
-    print(f"🔈 Starting server on port {port}")
+    logger.info(f"Server listening on 0.0.0.0:{port}")
     async with websockets.serve(handler, "0.0.0.0", port):
-        await asyncio.Future()  # run forever
+        await asyncio.Future()  # работа до Ctrl+C
 
 if __name__ == "__main__":
     asyncio.run(main())
