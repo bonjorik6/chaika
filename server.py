@@ -11,9 +11,7 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                if data["type"] in (
-                    "text", "audio", "media"
-                ):
+                if data["type"] in ("text", "file", "voice", "audio", "media"):
                     await asyncio.gather(*[
                         client.send(json.dumps(data))
                         for client in connected_clients
