@@ -34,7 +34,7 @@ async def unregister(ws):
 async def handler(ws, path):
     try:
         async for raw in ws:
-            # Parse JSON
+            # Parse incoming JSON
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
@@ -44,15 +44,15 @@ async def handler(ws, path):
             room_id = data.get('room_id')
             msg_type = data.get('type')
 
-            # Validate
+            # Validate message
             if room_id is None or msg_type not in ALLOWED_TYPES:
-                logger.warning('Skipping message without room_id or unsupported type: %s', data)
+                logger.warning('Skipping unsupported message: %s', data)
                 continue
 
-            # Register client in room
+            # Ensure this ws is in the room
             await register(ws, room_id)
 
-            # Broadcast to other clients in the same room
+            # Broadcast to **other** clients in the same room
             for peer in room_clients[room_id]:
                 if peer is not ws:
                     try:
@@ -65,11 +65,12 @@ async def handler(ws, path):
         await unregister(ws)
 
 async def main():
+    # On Railway, PORT is provided via env
     port = int(os.environ.get('PORT', '6789'))
     server = await websockets.serve(handler, '0.0.0.0', port)
     logger.info(f'WebSocket server listening on 0.0.0.0:{port}')
 
-    # Graceful shutdown on signals
+    # Graceful shutdown on SIGINT/SIGTERM
     loop = asyncio.get_event_loop()
     stop = loop.create_future()
     for sig in (signal.SIGINT, signal.SIGTERM):
