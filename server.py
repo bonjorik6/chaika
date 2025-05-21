@@ -13,8 +13,7 @@ async def handler(websocket):
             try:
                 data = json.loads(message)
                 if data["type"] in (
-                    "text", "audio", "media",
-                    "webrtc_offer", "webrtc_answer", "webrtc_ice", "webrtc_end"
+                    "text", "audio", "media"
                 ):
                     await asyncio.gather(*[
                         client.send(json.dumps(data))
