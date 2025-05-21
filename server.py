@@ -1,42 +1,48 @@
 # server.py
-import asyncio, os, json
-from aiohttp import web
-import websockets
+import os
+import json
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import uvicorn
 
-connected_clients = set()
+app = FastAPI()
+active_connections: list[WebSocket] = []
 
-# --- HTTP health-check ---
-async def health(request):
-    return web.Response(text="OK")
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
-def start_http():
-    app = web.Application()
-    app.router.add_get('/healthz', health)
-    web.run_app(app, host='0.0.0.0', port=int(os.getenv("HTTP_PORT", 8000)), print=None)
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    active_connections.append(ws)
+    print(f"[SERVER] Client connected: {ws.client}")
 
-async def handler(websocket, path):
-    print(f"[SERVER] Client connected: {websocket.remote_address}")
-    connected_clients.add(websocket)
     try:
-        async for message in websocket:
-            dead = []
-            for client in connected_clients:
-                if client is websocket: continue
-                try: await client.send(message)
-                except: dead.append(client)
-            for d in dead: connected_clients.discard(d)
-    finally:
-        connected_clients.discard(websocket)
-        print(f"[SERVER] Client disconnected: {websocket.remote_address}")
+        while True:
+            # ждём текстового сообщения (JSON-строки)
+            msg = await ws.receive_text()
+            # ретранслируем «как есть» всем остальным
+            disconnected = []
+            for conn in active_connections:
+                if conn is ws:
+                    continue
+                try:
+                    await conn.send_text(msg)
+                except Exception:
+                    disconnected.append(conn)
+            # убираем отвалившиеся
+            for dc in disconnected:
+                active_connections.remove(dc)
 
-async def main_ws():
-    port = int(os.getenv("PORT", 8080))
-    async with websockets.serve(handler, '0.0.0.0', port):
-        print(f"WebSocket-сервер запущен на порту {port}")
-        await asyncio.Future()
+    except WebSocketDisconnect:
+        print(f"[SERVER] Client disconnected: {ws.client}")
+        active_connections.remove(ws)
+    except Exception as e:
+        # чтобы не убирать по 1011 сразу
+        print(f"[SERVER] Error in connection {ws.client}: {e}")
+        if ws in active_connections:
+            active_connections.remove(ws)
 
 if __name__ == "__main__":
-    # Запускаем HTTP в отдельном потоке, чтобы Railway не убивал контейнер
-    import threading
-    threading.Thread(target=start_http, daemon=True).start()
-    asyncio.run(main_ws())
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
