@@ -2,7 +2,6 @@ import os
 import json
 import asyncio
 import logging
-
 import websockets
 from websockets.exceptions import ConnectionClosed
 import psycopg2
@@ -16,14 +15,7 @@ DB_USER     = os.environ.get("PGUSER", "postgres")
 DB_PASSWORD = os.environ.get("PGPASSWORD", "XrRCKeVnqILcchiVtRiwzUbtloCFAlVy")
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("webrtc-server")
-
-CALL_TYPES = {
-    "call_request",
-    "call_answer",
-    "call_reject",
-    "call_end",
-}
+logger = logging.getLogger("chat-server")
 
 # Ключ: ник, значение: WebSocket-соединение
 connected_clients = {}
@@ -41,108 +33,54 @@ def get_conn():
 async def handler(ws):
     user_nick = None
     try:
-        # Ожидаем первое сообщение — регистрацию пользователя
+        # Ждём регистрации
         init = await ws.recv()
         init_data = json.loads(init)
         if init_data.get("type") != "register" or "from" not in init_data:
-            logger.warning("Клиент не отправил регистрацию")
             await ws.close(code=1008, reason="Must register first")
             return
 
         user_nick = init_data["from"]
         connected_clients[user_nick] = ws
-        logger.info(f"Пользователь зарегистрировался: {user_nick}")
+        logger.info(f"User registered: {user_nick}")
 
         async for raw in ws:
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                logger.warning("Получено не-JSON сообщение: %r", raw)
                 continue
 
-            typ     = data.get("type")
-            rid     = data.get("room_id")
-            frm     = data.get("from")
-            to_nick = data.get("to")
-            call_id = data.get("call_id")
+            msg_type = data.get("type")
+            sender   = data.get("from")
+            target   = data.get("to")
+            payload  = json.dumps(data)
 
-            # Работа с БД
-            if typ in CALL_TYPES:
-                conn = None
-                try:
-                    conn = get_conn()
-                    cur = conn.cursor()
+            # Рассылка: всем в комнате или адресно
+            if msg_type == "message":
+                # текстовые сообщения: отослать получателю
+                if target and target in connected_clients:
+                    await connected_clients[target].send(payload)
+                else:
+                    # широковещательно всем
+                    await asyncio.gather(
+                        *[ws_.send(payload) for ws_ in connected_clients.values()],
+                        return_exceptions=True
+                    )
 
-                    if typ == "call_request":
-                        cur.execute("""
-                            INSERT INTO calls (room_id, initiator, recipient, status, created_at)
-                            VALUES (%s, %s, %s, 'pending', NOW())
-                            RETURNING id
-                        """, (rid, frm, to_nick))
-                        call_id = cur.fetchone()["id"]
-                        data["call_id"] = call_id
-
-                    elif typ == "call_answer" and call_id:
-                        cur.execute("""
-                            UPDATE calls SET status='in_progress', started_at=NOW()
-                            WHERE id=%s
-                        """, (call_id,))
-
-                    elif typ == "call_reject" and call_id:
-                        cur.execute("""
-                            UPDATE calls SET status='cancelled', ended_at=NOW()
-                            WHERE id=%s
-                        """, (call_id,))
-
-                    elif typ == "call_end" and call_id:
-                        cur.execute("""
-                            UPDATE calls
-                               SET status='finished',
-                                   ended_at = NOW(),
-                                   duration = EXTRACT(EPOCH FROM NOW() - started_at)::INT
-                             WHERE id = %s
-                        """, (call_id,))
-
-                    conn.commit()
-                    cur.close()
-
-                except Exception as e:
-                    logger.exception("SQL error on %s: %s", typ, e)
-                    if conn:
-                        conn.rollback()
-                    await ws.close(code=1011, reason="DB error")
-                    return
-
-                finally:
-                    if conn:
-                        conn.close()
-
-            # Отправка сообщений адресно
-            msg = json.dumps(data)
-            recipient_ws = connected_clients.get(to_nick)
-
-            if typ == "call_request":
-                # Отправляем и вызываемому, и вызывающему
-                await asyncio.gather(
-                    *(ws_.send(msg) for user, ws_ in connected_clients.items()
-                      if user in {frm, to_nick}),
-                    return_exceptions=True
-                )
-            elif typ in {"webrtc_offer", "webrtc_answer", "webrtc_ice", "call_answer", "call_reject", "call_end"}:
-                if recipient_ws:
-                    await recipient_ws.send(msg)
-            elif typ == "webrtc_end":
-                # По желанию можно и себе отправить, и другому
-                await asyncio.gather(
-                    *(ws_.send(msg) for user, ws_ in connected_clients.items()
-                      if user in {frm, to_nick}),
-                    return_exceptions=True
-                )
+            elif msg_type in {"photo", "voice"}:
+                # медиа: пересылаем адресно или всем
+                if target and target in connected_clients:
+                    await connected_clients[target].send(payload)
+                else:
+                    await asyncio.gather(
+                        *[ws_.send(payload) for ws_ in connected_clients.values()],
+                        return_exceptions=True
+                    )
             else:
-                logger.debug("Неизвестный тип сообщения: %s", typ)
+                logger.debug(f"Unknown message type: {msg_type}")
 
     except ConnectionClosed:
-        logger.info("Клиент %s отключился", user_nick)
+        logger.info(f"Client disconnected: {user_nick}")
     finally:
         if user_nick and connected_clients.get(user_nick) == ws:
             del connected_clients[user_nick]
@@ -150,8 +88,8 @@ async def handler(ws):
 async def main():
     port = int(os.environ.get("PORT", 8080))
     async with websockets.serve(handler, "0.0.0.0", port):
-        logger.info(f"Сервер запущен на порту {port}")
-        await asyncio.Future()  # Бесконечно работает
+        logger.info(f"Server listening on port {port}")
+        await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
     asyncio.run(main())
