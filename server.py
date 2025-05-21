@@ -19,9 +19,7 @@ async def websocket_endpoint(ws: WebSocket):
 
     try:
         while True:
-            # ждём текстового сообщения (JSON-строки)
             msg = await ws.receive_text()
-            # ретранслируем «как есть» всем остальным
             disconnected = []
             for conn in active_connections:
                 if conn is ws:
@@ -30,7 +28,6 @@ async def websocket_endpoint(ws: WebSocket):
                     await conn.send_text(msg)
                 except Exception:
                     disconnected.append(conn)
-            # убираем отвалившиеся
             for dc in disconnected:
                 active_connections.remove(dc)
 
@@ -38,11 +35,10 @@ async def websocket_endpoint(ws: WebSocket):
         print(f"[SERVER] Client disconnected: {ws.client}")
         active_connections.remove(ws)
     except Exception as e:
-        # чтобы не убирать по 1011 сразу
         print(f"[SERVER] Error in connection {ws.client}: {e}")
         if ws in active_connections:
             active_connections.remove(ws)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run("server:app", host="0.0.0.0", port=port)
