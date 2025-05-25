@@ -11,14 +11,19 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                if data["type"] in ("text", "file", "voice", "audio", "media"):
+                msg_type = data.get("type")
+                if msg_type in (
+                    "text", "file", "voice", "audio", "media",
+                    "group_created", "group_renamed"
+                ):
+                    broadcast = json.dumps(data)
                     await asyncio.gather(*[
-                        client.send(json.dumps(data))
+                        client.send(broadcast)
                         for client in connected_clients
                         if client != websocket
                     ])
                 else:
-                    print(f"Неизвестный тип сообщения: {data['type']}")
+                    print(f"Неизвестный тип сообщения: {msg_type}")
             except json.JSONDecodeError:
                 print("Получено невалидное сообщение")
     except websockets.ConnectionClosed:
@@ -30,7 +35,7 @@ async def main():
     port = int(os.environ.get("PORT", 8080))
     async with websockets.serve(handler, "0.0.0.0", port):
         print(f"Сервер запущен на порту {port}")
-        await asyncio.Future()
+        await asyncio.Future()  # чтобы сервер не завершился
 
 if __name__ == "__main__":
     asyncio.run(main())
