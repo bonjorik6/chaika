@@ -15,7 +15,7 @@ async def handler(websocket):
                 if msg_type in (
                     "text", "file", "voice", "audio", "media",
                     "group_created", "group_renamed", "group_updated", 
-                    "room_deleted"
+                    "room_deleted", "history_cleared"
                 ):
                     broadcast = json.dumps(data)
                     await asyncio.gather(*[
