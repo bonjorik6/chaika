@@ -15,17 +15,14 @@ async def handler(websocket):
                 if msg_type in (
                     "text", "file", "voice", "audio", "media",
                     "group_created", "group_renamed", "group_updated", 
-                    "room_deleted", "history_cleared"
+                    "room_deleted"
                 ):
                     broadcast = json.dumps(data)
-                    # Вместо asyncio.gather: отправляем по одному и отлавливаем исключения
-                    for client in set(connected_clients):
-                        if client is websocket:
-                            continue
-                        try:
-                            await client.send(broadcast)
-                        except Exception as e:
-                            print(f"Ошибка при отправке клиенту {client.remote_address}: {e}")
+                    await asyncio.gather(*[
+                        client.send(broadcast)
+                        for client in connected_clients
+                        if client != websocket
+                    ])
                 else:
                     print(f"Неизвестный тип сообщения: {msg_type}")
             except json.JSONDecodeError:
